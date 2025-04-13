@@ -1,4 +1,4 @@
-# HCaptcha reverse engineer
+# HCaptcha reverse engineered
 
 ```
 this repo (and more generally all those linked to implex) are the result of countless hours of work, a lot of learning and new things.
@@ -18,8 +18,9 @@ Take the time to look and learn, instead of copying without thinking, because it
 - `1.40.23` dynamic numbers for `fingerprint_events` + fix `ardata` always null
 - `1.40.25` `fingerprint_events` order change ??
 - `1.60.0` New VM
+- `1.80.0?` New obfuscation + VM for motiondata which gets pushed into N data 
 
-## String integrity check
+## String integrity check (outdated)
 
 [This script](https://gist.github.com/nikolahellatrigger/a8856463170fbe3596569977148ebaf4) is used to "encode" somes data into `fingerprint_event` field such as:
     
@@ -59,9 +60,17 @@ I think it's used to verify the data is authentic / non duplicated (output is di
 Rand is a `CRC-32` checksum hash of the N payload in json format, it's used to check the payload integrity if you edited it from memory etc...
 Format: `[math.random, crc-32 * 2.3283064365386963e-10]` (`table: 79764919`)
 
-## Encryption
+## Encryptions
 
-Final payload is encrypted using `AES-256-GCM` (`256 bits key`)
+There are two encryptions in wasm `AES-256-GCM` (3 different keys)
+
+And one encryption in the JS `AES-128-CBC`
+
+- [N data encryption](https://github.com/Implex-ltd/hcaptcha-reverse/blob/main/encryptions/main.py)
+- [Request payload and response encryption](https://github.com/Implex-ltd/hcaptcha-reverse/blob/main/encryptions/request.py)
+- [Fingerprint blob encryption](https://github.com/Implex-ltd/hcaptcha-reverse/blob/main/encryptions/blob.py)
+
+- [AES key fetcher for N data encryption](https://github.com/Implex-ltd/hcaptcha-reverse/blob/main/encryptions/fetcher.py)
 
 ## Fingerprint events
 
@@ -69,7 +78,7 @@ Final payload is encrypted using `AES-256-GCM` (`256 bits key`)
 > Final output is used into n data.
 > Hash algorithm is xxHash3 (sixty_four.rs). 
 
-### Raw javascript fp output
+### Raw javascript fp output (outdated)
 
 - You can use [fingerprint_dumper.js](https://github.com/Implex-ltd/hcaptcha-reverse/blob/main/versions/fingerprint_dumper.js) to to dump the current raw fp before they got parsed by WASM
 
@@ -230,3 +239,78 @@ getLen: function () {
     return jlen
 },
 ```
+
+## Key Building Algo
+
+the 32 byte key is generated as follows:
+
+1. the first 2 bytes are taken directly from the `key_seed` (in little format)
+2. the remaining 30 bytes are generated iteratively:
+
+   for each step (0-29):
+   
+   a. if not the first step, update the seed using an LCG:
+      ```
+      seed = (seed * 6364136223846793005) & 0xFFFFFFFFFFFFFFFF
+      seed = (seed ± key_factor1) & 0xFFFFFFFFFFFFFFFF  // + or - depending on operator
+      ```
+   
+   b. calculate memory access positions:
+      ```
+      base_index = memory + step
+      memory_position = base_index + key_factor2
+      segment_address = (((memory_position // 320) << 3) + memory_position + 1032 - 1075552) % len(memory)
+      mask_address = (memory_position % 96) + 8
+      ```
+   
+   c. extract values from memory:
+      ```
+      segment_value = 32 bit little value from memory[segment_address]
+      mask_value = 64 bit little value from memory[mask_address]
+      ```
+   
+   d. calculate hash value:
+      ```
+      hash_value = (segment_value ^ (mask_value & 0xFFFFFFFF)) & 0xFF
+      ```
+   
+   e. extract and process bit positions from the seed:
+      ```
+      bit45 = (seed >> 45) & 0xFFFFFFFF
+      bit27 = (seed >> 27) & 0xFFFFFFFF
+      bit59 = (seed >> 59) & 0xFFFFFFFF
+
+      if bit45 & 0x80000000: bit45 = bit45 - 0x100000000
+      if bit27 & 0x80000000: bit27 = bit27 - 0x100000000
+      if bit59 & 0x80000000: bit59 = bit59 - 0x100000000
+      ```
+   
+   f. combine and rotate bits:
+      ```
+      combined = bit45 ^ bit27
+      shift = bit59 % 32
+      rotated = ((combined >> shift) | (combined << (32 - shift))) & 0xFFFFFFFF
+
+      if rotated & 0x80000000: rotated = rotated - 0x100000000
+      ```
+   
+   g. calculate final key byte and add to key:
+      ```
+      key_byte = (hash_value ^ rotated) & 0xFF
+      key_bytes.append(key_byte)
+      ```
+
+3. The final key is the hex representation of all 32 bytes
+
+### Linear Congruential Generator
+
+the algorithm uses an LCG with the following parameters:
+- multiplier: 6364136223846793005
+- increment: different based on `key_factor1` and `operator`
+- modulus: 2^64
+
+## Notes (from Cyrus)
+
+- This community is a shitty community filled with arrogant people *ehm ehm dort* who can't take anything seriously
+- This is going to be the last time you are seeing me, good luck to everyone who is on this path (The VM is pretty fun). 
+- If you urgently need me contact me at telegram: @hcaptcha_staff
