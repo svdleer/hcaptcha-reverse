@@ -313,4 +313,4 @@ the algorithm uses an LCG with the following parameters:
 
 - This community is a shitty community filled with arrogant people *ehm ehm dort* who can't take anything seriously
 - This is going to be the last time you are seeing me, good luck to everyone who is on this path (The VM is pretty fun). 
-- If you urgently need me contact me at telegram: @hcaptcha_staff
+- If you urgently need me contact me (Cyrus) at telegram: @hcaptcha_staff
