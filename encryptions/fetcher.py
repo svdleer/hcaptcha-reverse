@@ -1,3 +1,4 @@
+import urllib.parse
 # hCaptcha AES encryption key fetcher for n data
 # I won't be releasing key fetchers for other keys 
 # fuck dort he's a unskilled bitch
@@ -34,13 +35,53 @@ class HCaptchaKey:
         self._generate_n_key()
         return self.key
 
+    def _js_urCsJW(self, base64_input: str) -> str:
+        raw_bytes = base64.b64decode(base64_input + "==")
+        return urllib.parse.unquote(''.join(chr(b) for b in raw_bytes))
+
     def _extract_wasm(self):
         hsw = requests.get(
             f"https://newassets.hcaptcha.com/c/{self.version}/hsw.js"
         ).text
-        self._wasm_binary = base64.b64decode(hsw.split('0,null,"')[1].split('"')[0])
-        print(f"extracted wasm binary: {len(self._wasm_binary)} bytes")
 
+        # OLD FORMAT
+        if '0,null,"' in hsw:
+            self._wasm_binary = base64.b64decode(hsw.split('0,null,"')[1].split('"')[0])
+            print(f"[+] Extracted inline wasm binary: {len(self._wasm_binary)} bytes")
+            return
+
+        # NEW FORMAT
+        var_match = re.findall(r'var\s+(\w+)\s*=\s*"([A-Za-z0-9+/=]{100,})";', hsw)
+        var_dict = {k: v for k, v in var_match}
+        used_var = None
+        for ref in re.findall(r'urCsJW\((\w+)\)', hsw):
+            if ref in var_dict:
+                used_var = ref
+                break
+        if not used_var:
+            raise RuntimeError("Base64 variable for urCsJW(...) not found")
+        decoded = self._js_urCsJW(var_dict[used_var])
+        string_table = decoded.split("|")
+        match = re.search(r'new\s+Blob\(\[\s*J\((\d+)\)', hsw)
+        if not match:
+            raise RuntimeError("new Blob([J(index)]) not found")
+        index = int(match.group(1))
+        for offset in range(150, 500):
+            try:
+                candidate = string_table[index - offset]
+                if "WebAssembly.instantiate" in candidate:
+                    worker_js = candidate
+                    break
+            except IndexError:
+                continue
+        else:
+            raise RuntimeError("Failed to resolve Worker JS from string table")
+        b64_wasm = re.search(r'atob\("([A-Za-z0-9+/=]+)"\)', worker_js)
+        if not b64_wasm:
+            raise RuntimeError("No base64 WASM found in worker blob")
+        self._wasm_binary = base64.b64decode(b64_wasm.group(1))
+        print(f"[+] Extracted blob wasm binary: {len(self._wasm_binary)} bytes")
+        
     def _decompile_wasm(self):
         with open("hsw.wasm", "wb") as f:
             f.write(self._wasm_binary)
@@ -317,7 +358,7 @@ class HCaptchaKey:
         self.key = bytes(key_bytes).hex()
 
 
-version = "5fef759e34a955dd56ceddd805e6a87d3f7d854c8c695bf797d43331bebfee3f"
+version = "b758a9be00a912a96d78509f327f60c00836f00dba55d8e572c348ac17889645"
 extractor = HCaptchaKey(version)
 n_key = extractor.run()
 print(f"encryption key: {n_key}")
